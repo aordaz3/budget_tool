@@ -1,10 +1,13 @@
 from datetime import datetime
 import json
 import os
+from types import SimpleNamespace
 from unittest import TestCase
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from categorize import _model_score
+from google.genai import errors
+
+from categorize import ReceiptCategorizer, _model_score
 from config import Settings
 from main import is_completed_status, run, should_run_scheduled
 from models import CategorizedReceipt, ReceiptItem, ReceiptSummary, ReceiptValidation
@@ -78,6 +81,41 @@ class PipelineTests(TestCase):
         self.assertTrue(is_completed_status("processed"))
         self.assertTrue(is_completed_status("needs_review"))
         self.assertFalse(is_completed_status("error: schema failure"))
+
+    @patch("categorize.time.sleep")
+    def test_transient_gemini_errors_retry_then_fall_back(self, sleep):
+        primary_error = errors.ServerError(
+            503,
+            {"error": {"code": 503, "status": "UNAVAILABLE", "message": "busy"}},
+        )
+        categorizer = object.__new__(ReceiptCategorizer)
+        categorizer.models = ["gemini-3.6-flash", "gemini-3.5-flash"]
+        categorizer.model = categorizer.models[0]
+        generate_content = Mock(
+            side_effect=[
+                primary_error,
+                primary_error,
+                SimpleNamespace(text=sample_receipt().model_dump_json()),
+            ]
+        )
+        categorizer.client = SimpleNamespace(
+            models=SimpleNamespace(generate_content=generate_content)
+        )
+
+        result = categorizer.categorize(b"image", "image/jpeg")
+
+        self.assertEqual(result.receipt.merchant, "Example")
+        self.assertEqual(sleep.call_count, 2)
+        for sleep_call in sleep.call_args_list:
+            self.assertGreaterEqual(sleep_call.args[0], 10)
+            self.assertLess(sleep_call.args[0], 11)
+        attempted_models = [
+            call.kwargs["model"] for call in generate_content.call_args_list
+        ]
+        self.assertEqual(
+            attempted_models,
+            ["gemini-3.6-flash", "gemini-3.6-flash", "gemini-3.5-flash"],
+        )
 
     def test_empty_inbox_configuration_does_not_require_output_secrets(self):
         environment = {

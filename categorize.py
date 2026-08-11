@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import random
 import re
+import time
 
 from google import genai
+from google.genai import errors
 from google.genai import types
 
 from models import CATEGORIES, CategorizedReceipt
@@ -38,6 +41,9 @@ SUPPORTED_MIME_TYPES = {
     "image/heic",
     "image/heif",
 }
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+MAX_API_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 10
 
 
 def _version_tuple(name: str) -> tuple[int, ...]:
@@ -83,7 +89,17 @@ def choose_model(client: genai.Client, override: str | None = None) -> str:
 class ReceiptCategorizer:
     def __init__(self, api_key: str, model_override: str | None = None):
         self.client = genai.Client(api_key=api_key)
-        self.model = choose_model(self.client, model_override)
+        self.models = (
+            [model_override.removeprefix("models/")]
+            if model_override
+            else available_flash_models(self.client)
+        )
+        if not self.models:
+            raise RuntimeError(
+                "No Gemini Flash model supporting generateContent is available to this "
+                "API key. Set GEMINI_MODEL to an available multimodal model."
+            )
+        self.model = self.models[0]
         LOGGER.info("Using Gemini model %s", self.model)
 
     def categorize(self, file_bytes: bytes, mime_type: str) -> CategorizedReceipt:
@@ -92,19 +108,47 @@ class ReceiptCategorizer:
         if len(file_bytes) >= 20 * 1024 * 1024:
             raise ValueError("Receipt is too large for inline Gemini processing (20 MB limit)")
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=[
-                "Extract and categorize every purchase on this receipt.",
-                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=SYSTEM_INSTRUCTION,
-                temperature=0,
-                response_mime_type="application/json",
-                response_schema=CategorizedReceipt,
-            ),
+        contents = [
+            "Extract and categorize every purchase on this receipt.",
+            types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+        ]
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_INSTRUCTION,
+            temperature=0,
+            response_mime_type="application/json",
+            response_schema=CategorizedReceipt,
         )
+
+        response = None
+        for attempt in range(MAX_API_ATTEMPTS):
+            # Give the preferred model one delayed retry, then use the next available
+            # Flash model for the final attempt when possible.
+            model_index = 1 if attempt == 2 and len(self.models) > 1 else 0
+            model = self.models[model_index]
+            if model != self.model:
+                LOGGER.warning("Falling back from %s to %s", self.model, model)
+            try:
+                response = self.client.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+                break
+            except errors.APIError as exc:
+                final_attempt = attempt == MAX_API_ATTEMPTS - 1
+                if exc.code not in RETRYABLE_STATUS_CODES or final_attempt:
+                    raise
+                delay = RETRY_DELAY_SECONDS + random.uniform(0, 1)
+                LOGGER.warning(
+                    "Gemini %s returned HTTP %s; retrying in %.1f seconds",
+                    model,
+                    exc.code,
+                    delay,
+                )
+                time.sleep(delay)
+
+        if response is None:
+            raise RuntimeError("Gemini did not return a response")
         if not response.text:
             raise RuntimeError("Gemini returned an empty response")
         return CategorizedReceipt.model_validate_json(response.text)
