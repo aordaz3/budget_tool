@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date as Date
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -27,7 +27,9 @@ CATEGORIES = (
 
 class ReceiptSummary(BaseModel):
     merchant: Optional[str] = None
-    date: Optional[date] = None
+    # Alias the type because a field named `date` can shadow datetime.date while
+    # Pydantic resolves postponed annotations.
+    date: Optional[Date] = None
     subtotal: Optional[float] = Field(default=None, ge=0)
     tax: Optional[float] = Field(default=None, ge=0)
     total: Optional[float] = Field(default=None, ge=0)

@@ -77,6 +77,10 @@ class PipelineTests(TestCase):
             "exclusiveMinimum", json.dumps(CategorizedReceipt.model_json_schema())
         )
 
+    def test_receipt_date_parses_from_gemini_json(self):
+        receipt = ReceiptSummary.model_validate({"date": "2026-08-10"})
+        self.assertEqual(receipt.date.isoformat(), "2026-08-10")
+
     def test_only_success_and_review_are_completed_statuses(self):
         self.assertTrue(is_completed_status("processed"))
         self.assertTrue(is_completed_status("needs_review"))
