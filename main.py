@@ -32,18 +32,28 @@ def run(settings: Settings) -> int:
         settings.google_service_account_info, scopes=GOOGLE_SCOPES
     )
     drive_service = build("drive", "v3", credentials=credentials, cache_discovery=False)
+    drive = ReceiptDrive(drive_service, settings.inbox_folder_id)
+    files = drive.list_receipts()
+    LOGGER.info("Found %d supported receipt file(s) in Inbox", len(files))
+    if not files:
+        LOGGER.info("Inbox is empty; nothing to process")
+        return 0
+
+    settings.require_processing_config()
     sheets_service = build(
         "sheets", "v4", credentials=credentials, cache_discovery=False
     )
-
-    drive = ReceiptDrive(drive_service, settings.inbox_folder_id)
     sheets = ReceiptSheets(sheets_service, settings.spreadsheet_id)
-    categorizer = ReceiptCategorizer(
-        settings.gemini_api_key, settings.gemini_model
-    )
     recorded_files = sheets.recorded_files()
-    files = drive.list_receipts()
-    LOGGER.info("Found %d supported receipt file(s) in Inbox", len(files))
+
+    # Avoid a Gemini API call when every Inbox file was already recorded. This path
+    # only repairs a previous Drive move that did not complete.
+    unrecorded_files = [item for item in files if item.id not in recorded_files]
+    categorizer = (
+        ReceiptCategorizer(settings.gemini_api_key, settings.gemini_model)
+        if unrecorded_files
+        else None
+    )
 
     failures = 0
     for receipt_file in files:
@@ -66,6 +76,8 @@ def run(settings: Settings) -> int:
         processed_at = datetime.now(ZoneInfo(settings.timezone))
         try:
             file_bytes = drive.download(receipt_file.id)
+            if categorizer is None:  # Defensive; all recorded files continued above.
+                raise RuntimeError("Gemini categorizer was not initialized")
             result = categorizer.categorize(file_bytes, receipt_file.mime_type)
             needs_review = sheets.write_receipt(
                 result,

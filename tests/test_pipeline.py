@@ -1,8 +1,12 @@
 from datetime import datetime
+import json
+import os
 from unittest import TestCase
+from unittest.mock import patch
 
 from categorize import _model_score
-from main import should_run_scheduled
+from config import Settings
+from main import run, should_run_scheduled
 from models import CategorizedReceipt, ReceiptItem, ReceiptSummary, ReceiptValidation
 from sheets import _row_for_headers
 
@@ -64,3 +68,45 @@ class PipelineTests(TestCase):
     def test_scheduled_hour(self):
         self.assertTrue(should_run_scheduled(datetime(2026, 8, 11, 22), 22))
         self.assertFalse(should_run_scheduled(datetime(2026, 8, 11, 23), 22))
+
+    def test_empty_inbox_configuration_does_not_require_output_secrets(self):
+        environment = {
+            "GOOGLE_SERVICE_ACCOUNT_JSON": json.dumps({"type": "service_account"}),
+            "GOOGLE_DRIVE_INBOX_FOLDER_ID": "inbox-id",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings.from_env()
+        self.assertEqual(settings.gemini_api_key, "")
+
+    def test_processing_configuration_reports_all_missing_secrets(self):
+        environment = {
+            "GOOGLE_SERVICE_ACCOUNT_JSON": json.dumps({"type": "service_account"}),
+            "GOOGLE_DRIVE_INBOX_FOLDER_ID": "inbox-id",
+        }
+        with patch.dict(os.environ, environment, clear=True):
+            settings = Settings.from_env()
+        with self.assertRaisesRegex(ValueError, "GEMINI_API_KEY"):
+            settings.require_processing_config()
+
+    @patch("main.ReceiptCategorizer")
+    @patch("main.ReceiptSheets")
+    @patch("main.ReceiptDrive")
+    @patch("main.build")
+    @patch("main.service_account.Credentials.from_service_account_info")
+    def test_empty_inbox_skips_sheets_and_gemini(
+        self, credentials, build, drive_class, sheets_class, categorizer_class
+    ):
+        drive_class.return_value.list_receipts.return_value = []
+        settings = Settings(
+            gemini_api_key="",
+            gemini_model=None,
+            google_service_account_info={},
+            inbox_folder_id="inbox-id",
+            processed_folder_id="",
+            review_folder_id="",
+            spreadsheet_id="",
+        )
+
+        self.assertEqual(run(settings), 0)
+        sheets_class.assert_not_called()
+        categorizer_class.assert_not_called()
