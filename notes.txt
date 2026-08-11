@@ -1,12 +1,1 @@
-workflow:
-    cloud folder with pictures of recepts
-    script extraxts text
-    script categorizes spending (api call)
-        categories
-            grocieries
-            takeout/entertainment
-            health/personal care
-            
-    script write to sheet
-
-    how will sheet be made?
+Implementation and setup instructions are maintained in README.md.

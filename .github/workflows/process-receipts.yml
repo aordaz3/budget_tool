@@ -1,0 +1,39 @@
+name: Process receipts
+
+on:
+  schedule:
+    # GitHub cron is UTC. Running at both UTC offsets plus the Python local-time
+    # guard keeps this at 10 PM America/Denver through daylight-saving changes.
+    - cron: "0 4,5 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: process-receipts
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Process Inbox
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+          GOOGLE_DRIVE_INBOX_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_INBOX_FOLDER_ID }}
+          GOOGLE_DRIVE_PROCESSED_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PROCESSED_FOLDER_ID }}
+          GOOGLE_DRIVE_REVIEW_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_REVIEW_FOLDER_ID }}
+          GOOGLE_SHEETS_SPREADSHEET_ID: ${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID }}
+          CONFIDENCE_THRESHOLD: "0.75"
+        # Manual dispatches run immediately; cron dispatches use the Mountain-time guard.
+        run: python main.py ${{ github.event_name == 'schedule' && '--scheduled' || '' }}

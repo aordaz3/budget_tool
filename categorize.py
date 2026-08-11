@@ -1,168 +1,110 @@
-import os
+from __future__ import annotations
+
+import logging
+import re
+
 from google import genai
 from google.genai import types
 
+from models import CATEGORIES, CategorizedReceipt
 
-def sheets(categories):
-    """
-    sends gemini categorist to their correct sheet in drive
 
-    sheet sturcute is as follows:
+LOGGER = logging.getLogger(__name__)
 
-    transactions: 
-    transaction_id	receipt_id	date	merchant	item	quantity	unit_price	total_price	category	subcategory	purchaser	confidence	notes	receipt_file	processed_at
-    1 row per transaction
+SYSTEM_INSTRUCTION = f"""
+You extract household purchases from receipt scans into structured data.
 
-    receipts:
-    receipt_id	file_id	filename	merchant	date	subtotal	tax	total	purchaser	processed_at	status
-    1 row per reciept
-    """
+Rules:
+- Extract each purchased item as a separate line. Do not combine line items.
+- Preserve the printed description in raw_item and normalize it in normalized_item.
+- Use only these categories: {', '.join(CATEGORIES)}.
+- Ignore coupons, discounts, tax, tips, payment methods, change, and summary lines as items.
+- unit_price is the price for one unit; total_price is quantity multiplied by unit_price,
+  after any item-specific discount visible on the receipt.
+- Never invent a readable price. Use the best visual interpretation of unclear text and
+  lower confidence when uncertain.
+- Confidence is from 0 to 1 and represents certainty in the extracted item, price, and
+  category together.
+- Compare the sum of total_price with the printed subtotal. Mark validation.needs_review
+  for ambiguity, unreadable content, missing totals, or a discrepancy.
+- Return dates in YYYY-MM-DD form when visible.
+""".strip()
 
-def search():
-    """
-    responsible for searching inbox for new scans and passing over to gemini (cat)
-    and moving them over when done
-    """
+SUPPORTED_MIME_TYPES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
 
-def cat(file):
-    """
-    categorizes recpit purchase based on strict rules
-    """
-    AI_WHIP = """
-    You are a household expense categorization system. 
-    Your job is to analyze a receipt and convert it into structured expense data.
-    IMPORTANT RULES:
-    1. Categorize individual purchased items, not the receipt as a whole.
-    2. Use ONLY categories from the allowed category list below.
-    3. Never invent a new category.
-    4. Do not guess an item price if a price can be read from the receipt.
-    5. Preserve the merchant name and receipt date when they are visible.
-    6. If an item cannot be confidently identified, use "Other".
-    7. If an item is ambiguous, make your best reasonable categorization 
-    and provide a confidence score.
-    8. Ignore store loyalty discounts, coupons, subtotals, tax, payment 
-    methods, change, and other non-purchase lines.
-    9. Do not treat sales tax as an individual purchase.
-    10. The sum of item totals should approximately match the receipt 
-    subtotal. Flag discrepancies.
-    11. Do not combine multiple line items unless the receipt clearly 
-    represents them as one purchase.
-    12. Keep the original receipt item description in "raw_item".
-    13. Normalize obvious abbreviations when possible, but preserve 
-    the original text in "raw_item".
-    14. Return ONLY valid JSON. Do not include markdown, explanations, 
-    or code fences.
 
-    ALLOWED CATEGORIES:
-    - Groceries
-    - Dining
-    - Household
-    - Personal
-    - Health
-    - Transportation
-    - Entertainment
-    - Clothing
-    - Electronics
-    - Home Improvement
-    - Travel
-    - Gifts
-    - Education
-    - Subscriptions
-    - Other
+def _version_tuple(name: str) -> tuple[int, ...]:
+    match = re.search(r"gemini-(\d+(?:\.\d+)*)", name)
+    return tuple(int(part) for part in match.group(1).split(".")) if match else ()
 
-    RETURN THIS JSON STRUCTURE:
 
-    {
-    "receipt": {
-        "merchant": null,
-        "date": null,
-        "subtotal": null,
-        "tax": null,
-        "total": null
-    },
-    "items": [
-        {
-        "raw_item": "",
-        "normalized_item": "",
-        "quantity": 1,
-        "price": 0.00,
-        "category": "",
-        "subcategory": null,
-        "confidence": 0,
-        "notes": null
-        }
-    ],
-    "validation": {
-        "items_match_subtotal": true,
-        "discrepancy": 0.00,
-        "needs_review": false
-    }
-    }
+def _model_score(name: str) -> tuple:
+    lowered = name.lower()
+    stable = not any(word in lowered for word in ("preview", "experimental", "exp"))
+    full_flash = "flash" in lowered and "flash-lite" not in lowered
+    return stable, full_flash, _version_tuple(lowered), lowered
 
-    CATEGORY GUIDANCE:
-    Groceries:
-    Food and beverages purchased for home consumption.
 
-    Dining:
-    Restaurants, takeout, fast food, cafes, coffee shops, delivery, 
-    and prepared food purchased outside the home.
+def available_flash_models(client: genai.Client) -> list[str]:
+    candidates: list[str] = []
+    for model in client.models.list():
+        name = (model.name or "").removeprefix("models/")
+        actions = {action.lower() for action in (model.supported_actions or [])}
+        excluded = ("image", "tts", "live", "embedding", "veo", "audio")
+        if (
+            name.startswith("gemini-")
+            and "flash" in name.lower()
+            and "generatecontent" in actions
+            and not any(token in name.lower() for token in excluded)
+        ):
+            candidates.append(name)
+    return sorted(set(candidates), key=_model_score, reverse=True)
 
-    Household:
-    Cleaning supplies, paper products, laundry supplies, kitchen 
-    consumables, and general household goods.
 
-    Personal:
-    Shampoo, cosmetics, toiletries, grooming products, etc.
+def choose_model(client: genai.Client, override: str | None = None) -> str:
+    if override:
+        return override.removeprefix("models/")
+    candidates = available_flash_models(client)
+    if not candidates:
+        raise RuntimeError(
+            "No Gemini Flash model supporting generateContent is available to this API key. "
+            "Set GEMINI_MODEL to an available multimodal model."
+        )
+    return candidates[0]
 
-    Health:
-    Medicine, pharmacy purchases, medical supplies, vitamins, 
-    and health-related products.
 
-    Transportation:
-    Gas, parking, tolls, car washes, and transportation-related purchases.
+class ReceiptCategorizer:
+    def __init__(self, api_key: str, model_override: str | None = None):
+        self.client = genai.Client(api_key=api_key)
+        self.model = choose_model(self.client, model_override)
+        LOGGER.info("Using Gemini model %s", self.model)
 
-    Entertainment:
-    Movies, games, hobbies, events, etc.
+    def categorize(self, file_bytes: bytes, mime_type: str) -> CategorizedReceipt:
+        if mime_type not in SUPPORTED_MIME_TYPES:
+            raise ValueError(f"Unsupported receipt MIME type: {mime_type}")
+        if len(file_bytes) >= 20 * 1024 * 1024:
+            raise ValueError("Receipt is too large for inline Gemini processing (20 MB limit)")
 
-    Clothing:
-    Clothes, shoes, accessories, etc.
-
-    Electronics:
-    Computers, phones, cables, chargers, batteries, headphones, etc.
-
-    Home Improvement:
-    Tools, hardware, paint, building materials, fixtures, etc.
-
-    Travel:
-    Hotels, airfare, rental cars, travel-related purchases.
-
-    Gifts:
-    Items clearly purchased as gifts for someone else.
-
-    Education:
-    School supplies, tuition-related purchases, educational materials.
-
-    Subscriptions:
-    Recurring digital or physical subscription purchases when clearly identifiable.
-
-    Other:
-    Anything that does not reasonably fit the categories above.
-
-    SPECIAL CASES:
-
-    - If a grocery store receipt contains both food and household products, categorize each item individually.
-    - If the receipt says something abbreviated like "ORG BAN", interpret it as "Organic Bananas" and categorize as Groceries.
-    - If the receipt says "CLN SPRY", interpret it as a cleaning spray and categorize as Household.
-    - If an item could reasonably belong to multiple categories, choose the most specific category and explain the ambiguity in notes.
-    - Confidence should represent how certain you are about the categorization, not how readable the receipt is.
-    """
-
-    client = genai.Client()
-
-    response = client.models.generate_content(
-        model="gemini-3.5-flash",
-        contents="Categorize the following purchase on this receipt",
-        config=types.GenerateContentConfig(
-            system_instruction= AI_WHIP)
-    )
-
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=[
+                "Extract and categorize every purchase on this receipt.",
+                types.Part.from_bytes(data=file_bytes, mime_type=mime_type),
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=SYSTEM_INSTRUCTION,
+                temperature=0,
+                response_mime_type="application/json",
+                response_schema=CategorizedReceipt,
+            ),
+        )
+        if not response.text:
+            raise RuntimeError("Gemini returned an empty response")
+        return CategorizedReceipt.model_validate_json(response.text)
