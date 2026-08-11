@@ -23,6 +23,10 @@ GOOGLE_SCOPES = (
 )
 
 
+def is_completed_status(status: str) -> bool:
+    return status in {"processed", "needs_review"}
+
+
 def should_run_scheduled(now: datetime, hour: int) -> bool:
     return now.hour == hour
 
@@ -48,7 +52,12 @@ def run(settings: Settings) -> int:
 
     # Avoid a Gemini API call when every Inbox file was already recorded. This path
     # only repairs a previous Drive move that did not complete.
-    unrecorded_files = [item for item in files if item.id not in recorded_files]
+    unrecorded_files = [
+        item
+        for item in files
+        if item.id not in recorded_files
+        or not is_completed_status(recorded_files[item.id])
+    ]
     categorizer = (
         ReceiptCategorizer(settings.gemini_api_key, settings.gemini_model)
         if unrecorded_files
@@ -57,7 +66,9 @@ def run(settings: Settings) -> int:
 
     failures = 0
     for receipt_file in files:
-        if receipt_file.id in recorded_files:
+        if receipt_file.id in recorded_files and is_completed_status(
+            recorded_files[receipt_file.id]
+        ):
             previous_status = recorded_files[receipt_file.id]
             destination = (
                 settings.processed_folder_id

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from categorize import _model_score
 from config import Settings
-from main import run, should_run_scheduled
+from main import is_completed_status, run, should_run_scheduled
 from models import CategorizedReceipt, ReceiptItem, ReceiptSummary, ReceiptValidation
 from sheets import _row_for_headers
 
@@ -68,6 +68,16 @@ class PipelineTests(TestCase):
     def test_scheduled_hour(self):
         self.assertTrue(should_run_scheduled(datetime(2026, 8, 11, 22), 22))
         self.assertFalse(should_run_scheduled(datetime(2026, 8, 11, 23), 22))
+
+    def test_gemini_schema_avoids_unsupported_exclusive_minimum(self):
+        self.assertNotIn(
+            "exclusiveMinimum", json.dumps(CategorizedReceipt.model_json_schema())
+        )
+
+    def test_only_success_and_review_are_completed_statuses(self):
+        self.assertTrue(is_completed_status("processed"))
+        self.assertTrue(is_completed_status("needs_review"))
+        self.assertFalse(is_completed_status("error: schema failure"))
 
     def test_empty_inbox_configuration_does_not_require_output_secrets(self):
         environment = {

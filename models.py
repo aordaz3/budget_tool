@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 CATEGORIES = (
@@ -36,7 +36,9 @@ class ReceiptSummary(BaseModel):
 class ReceiptItem(BaseModel):
     raw_item: str
     normalized_item: str
-    quantity: float = Field(default=1, gt=0)
+    # Gemini's generateContent schema supports minimum but not exclusiveMinimum.
+    # Keep the wire schema compatible and enforce strict positivity after parsing.
+    quantity: float = Field(default=1, ge=0)
     unit_price: float = Field(ge=0)
     total_price: float = Field(ge=0)
     category: Literal[
@@ -59,6 +61,13 @@ class ReceiptItem(BaseModel):
     subcategory: Optional[str] = None
     confidence: float = Field(ge=0, le=1)
     notes: Optional[str] = None
+
+    @field_validator("quantity")
+    @classmethod
+    def quantity_must_be_positive(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("quantity must be greater than zero")
+        return value
 
 
 class ReceiptValidation(BaseModel):
