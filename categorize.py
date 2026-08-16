@@ -9,7 +9,7 @@ from google import genai
 from google.genai import errors
 from google.genai import types
 
-from models import CATEGORIES, CategorizedReceipt
+from models import CATEGORIES, MONTHLY_BUDGETS, CategorizedReceipt
 
 
 LOGGER = logging.getLogger(__name__)
@@ -21,6 +21,22 @@ Rules:
 - Extract each purchased item as a separate line. Do not combine line items.
 - Preserve the printed description in raw_item and normalize it in normalized_item.
 - Use only these categories: {', '.join(CATEGORIES)}.
+- Apply these category rules:
+  - Date: every restaurant, cafe, takeout, food-delivery, bar, prepared-meal,
+    movie, event, game, hobby, or other entertainment purchase. All dining and
+    entertainment purchases go to Date.
+  - Groceries: food and beverages purchased for home consumption.
+  - Household: cleaning, paper, laundry, kitchen consumables, and general home goods.
+  - Personal: toiletries, grooming products, and cosmetics.
+  - Health: medicine, pharmacy items, medical supplies, and vitamins.
+  - Transportation: gas, parking, tolls, car washes, and transit.
+  - Gifts: items clearly purchased as gifts.
+  - Subscriptions: clearly identifiable recurring services.
+  - Rent and Utilities: only explicit housing rent or utility bill charges.
+  - Other: anything outside the active budget, including clothing, electronics,
+    home improvement, travel, education, and uncategorized purchases.
+- Monthly budget amounts are context only and must not change classification:
+  {', '.join(f'{category}=${amount}' for category, amount in MONTHLY_BUDGETS.items())}.
 - Ignore coupons, discounts, tax, tips, payment methods, change, and summary lines as items.
 - unit_price is the price for one unit; total_price is quantity multiplied by unit_price,
   after any item-specific discount visible on the receipt.

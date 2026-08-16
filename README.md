@@ -81,13 +81,32 @@ totals and processing metadata across every purchased item.
 | `Receipts` | One row per source receipt | Drive file ID, filename, merchant, subtotal, tax, total, processing time, status |
 | `Dashboard` | Aggregated analytical views | Category trends, spending summaries, review indicators |
 
-### Categories
+### Budget taxonomy
 
-The model is restricted to a controlled taxonomy: Groceries, Dining, Household,
-Personal, Health, Transportation, Entertainment, Clothing, Electronics, Home
-Improvement, Travel, Gifts, Education, Subscriptions, and Other. Restricting the
-label space makes downstream grouping stable and enables future classification
-evaluation with precision, recall, and macro-F1.
+The model is restricted to categories with an active monthly budget. All dining and
+entertainment spending—including restaurants, takeout, cafes, movies, events, games,
+and hobbies—is merged into `Date`. The separate zero-dollar `Entertainment` label is
+therefore removed rather than mapped to `Other`. Other zero-dollar categories—such as
+Clothing, Electronics, Home Improvement, Travel, and Education—are excluded from the
+model schema and map to `Other`.
+
+| Category | Monthly budget |
+|---|---:|
+| Rent | $700 |
+| Utilities | $100 |
+| Groceries | $250 |
+| Date | $150 |
+| Household | $20 |
+| Personal | $20 |
+| Health | $10 |
+| Transportation | $60 |
+| Gifts | $50 |
+| Subscriptions | $7 |
+| Other | $20 |
+| **Total** | **$1,387** |
+
+Restricting the label space makes downstream reporting stable and enables future
+classification evaluation with precision, recall, and macro-F1.
 
 ## Quality and review logic
 

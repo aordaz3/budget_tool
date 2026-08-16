@@ -7,10 +7,17 @@ from unittest.mock import Mock, patch
 
 from google.genai import errors
 
-from categorize import ReceiptCategorizer, _model_score
+from categorize import SYSTEM_INSTRUCTION, ReceiptCategorizer, _model_score
 from config import Settings
 from main import is_completed_status, run, should_run_scheduled
-from models import CategorizedReceipt, ReceiptItem, ReceiptSummary, ReceiptValidation
+from models import (
+    CATEGORIES,
+    MONTHLY_BUDGET_TOTAL,
+    CategorizedReceipt,
+    ReceiptItem,
+    ReceiptSummary,
+    ReceiptValidation,
+)
 from sheets import _row_for_headers
 
 
@@ -41,6 +48,19 @@ class PipelineTests(TestCase):
     def test_confidence_below_threshold_requires_review(self):
         self.assertTrue(sample_receipt(0.749).needs_review(0.75))
         self.assertFalse(sample_receipt(0.75).needs_review(0.75))
+
+    def test_budget_categories_match_active_budget(self):
+        self.assertEqual(MONTHLY_BUDGET_TOTAL, 1387)
+        self.assertIn("Date", CATEGORIES)
+        self.assertNotIn("Dining", CATEGORIES)
+        self.assertNotIn("Entertainment", CATEGORIES)
+        self.assertIn("All dining and\n    entertainment purchases go to Date", SYSTEM_INSTRUCTION)
+
+    def test_removed_category_is_rejected_by_schema(self):
+        item = sample_receipt().items[0].model_dump()
+        item["category"] = "Electronics"
+        with self.assertRaises(ValueError):
+            ReceiptItem.model_validate(item)
 
     def test_validation_failure_requires_review(self):
         self.assertTrue(sample_receipt(matches=False).needs_review(0.75))

@@ -6,23 +6,23 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-CATEGORIES = (
-    "Groceries",
-    "Dining",
-    "Household",
-    "Personal",
-    "Health",
-    "Transportation",
-    "Entertainment",
-    "Clothing",
-    "Electronics",
-    "Home Improvement",
-    "Travel",
-    "Gifts",
-    "Education",
-    "Subscriptions",
-    "Other",
-)
+MONTHLY_BUDGETS = {
+    "Rent": 700,
+    "Utilities": 100,
+    "Groceries": 250,
+    "Date": 150,
+    "Household": 20,
+    "Personal": 20,
+    "Health": 10,
+    "Transportation": 60,
+    "Gifts": 50,
+    "Subscriptions": 7,
+    "Other": 20,
+}
+
+# Keep the budget as the single source of truth for allowed model labels.
+CATEGORIES = tuple(MONTHLY_BUDGETS)
+MONTHLY_BUDGET_TOTAL = sum(MONTHLY_BUDGETS.values())
 
 
 class ReceiptSummary(BaseModel):
@@ -44,19 +44,15 @@ class ReceiptItem(BaseModel):
     unit_price: float = Field(ge=0)
     total_price: float = Field(ge=0)
     category: Literal[
+        "Rent",
+        "Utilities",
         "Groceries",
-        "Dining",
+        "Date",
         "Household",
         "Personal",
         "Health",
         "Transportation",
-        "Entertainment",
-        "Clothing",
-        "Electronics",
-        "Home Improvement",
-        "Travel",
         "Gifts",
-        "Education",
         "Subscriptions",
         "Other",
     ]
