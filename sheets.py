@@ -856,9 +856,11 @@ class ReceiptSheets:
                 "updateSheetProperties": {
                     "properties": {
                         "sheetId": sheet_id,
-                        "gridProperties": {"frozenRowCount": 9, "frozenColumnCount": 1},
+                        # Freezing only column A conflicts with the merged A1:F1 title.
+                        # Keep the dashboard header rows frozen without freezing columns.
+                        "gridProperties": {"frozenRowCount": 9},
                     },
-                    "fields": "gridProperties.frozenRowCount,gridProperties.frozenColumnCount",
+                    "fields": "gridProperties.frozenRowCount",
                 }
             },
             {

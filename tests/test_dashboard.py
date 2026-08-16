@@ -129,3 +129,14 @@ class DashboardSetupTests(TestCase):
             schema_service.spreadsheets().batchUpdate(
                 spreadsheetId="schema-check", body=body
             )
+
+        sheet_property_updates = [
+            request["updateSheetProperties"]
+            for body in fake.api.batch_bodies
+            for request in body.get("requests", [])
+            if "updateSheetProperties" in request
+        ]
+        self.assertEqual(
+            sheet_property_updates[-1]["properties"]["gridProperties"],
+            {"frozenRowCount": 9},
+        )
