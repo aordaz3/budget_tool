@@ -9,6 +9,7 @@ from google.genai import errors
 
 from categorize import SYSTEM_INSTRUCTION, ReceiptCategorizer, _model_score
 from config import Settings
+from income import IncomeDeposit
 from main import is_completed_status, run, should_run_scheduled
 from models import (
     CATEGORIES,
@@ -18,7 +19,7 @@ from models import (
     ReceiptSummary,
     ReceiptValidation,
 )
-from sheets import _row_for_headers
+from sheets import _month_values, _row_for_headers, canonical_category
 
 
 def sample_receipt(confidence: float = 0.9, matches: bool = True):
@@ -61,6 +62,46 @@ class PipelineTests(TestCase):
         item["category"] = "Electronics"
         with self.assertRaises(ValueError):
             ReceiptItem.model_validate(item)
+
+    def test_historical_categories_migrate_to_active_budget(self):
+        self.assertEqual(canonical_category("Dining"), "Date")
+        self.assertEqual(canonical_category("Entertainment"), "Date")
+        self.assertEqual(canonical_category("Electronics"), "Other")
+        self.assertEqual(canonical_category("Groceries"), "Groceries")
+
+    def test_income_deposit_uses_take_home_amount_and_date(self):
+        deposit = IncomeDeposit.model_validate(
+            {
+                "deposit_date": "2026-08-15",
+                "source": "Employer Payroll",
+                "take_home_pay": 1250.75,
+                "confidence": 0.95,
+            }
+        )
+        self.assertEqual(deposit.deposit_date.isoformat(), "2026-08-15")
+        self.assertEqual(deposit.take_home_pay, 1250.75)
+        self.assertFalse(deposit.requires_review(0.75))
+
+    def test_income_schema_rejects_zero_deposit(self):
+        with self.assertRaises(ValueError):
+            IncomeDeposit.model_validate(
+                {
+                    "deposit_date": "2026-08-15",
+                    "take_home_pay": 0,
+                    "confidence": 1,
+                }
+            )
+
+    def test_income_schema_avoids_unsupported_exclusive_minimum(self):
+        self.assertNotIn(
+            "exclusiveMinimum", json.dumps(IncomeDeposit.model_json_schema())
+        )
+
+    def test_month_selector_values_are_first_of_month(self):
+        self.assertEqual(
+            _month_values(2026, 2026),
+            [f"2026-{month:02d}-01" for month in range(1, 13)],
+        )
 
     def test_validation_failure_requires_review(self):
         self.assertTrue(sample_receipt(matches=False).needs_review(0.75))
@@ -181,4 +222,27 @@ class PipelineTests(TestCase):
 
         self.assertEqual(run(settings), 0)
         sheets_class.assert_not_called()
+        categorizer_class.assert_not_called()
+
+    @patch("main.ReceiptCategorizer")
+    @patch("main.ReceiptSheets")
+    @patch("main.ReceiptDrive")
+    @patch("main.build")
+    @patch("main.service_account.Credentials.from_service_account_info")
+    def test_setup_sheet_runs_with_empty_inboxes(
+        self, credentials, build, drive_class, sheets_class, categorizer_class
+    ):
+        drive_class.return_value.list_receipts.return_value = []
+        settings = Settings(
+            gemini_api_key="",
+            gemini_model=None,
+            google_service_account_info={},
+            inbox_folder_id="inbox-id",
+            processed_folder_id="",
+            review_folder_id="",
+            spreadsheet_id="sheet-id",
+        )
+
+        self.assertEqual(run(settings, setup_sheet=True), 0)
+        sheets_class.return_value.setup_budget_dashboard.assert_called_once_with()
         categorizer_class.assert_not_called()

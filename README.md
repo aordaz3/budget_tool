@@ -1,13 +1,13 @@
-# Receipt Intelligence Pipeline
+# AI-Powered Budget Intelligence Pipeline
 
-An automated multimodal data pipeline that converts unstructured household receipt
-scans into validated, analysis-ready transaction data.
+An automated multimodal data pipeline that converts household receipt scans and
+direct-deposit screenshots into validated spending, income, and cash-surplus data.
 
-The system ingests PDF and image receipts from Google Drive, uses Gemini Vision for
-line-item extraction and classification, validates the structured output, routes
-uncertain records through a human-review workflow, and publishes clean tables to
-Google Sheets for dashboarding. GitHub Actions runs the pipeline every night at
-10:00 PM Mountain time.
+The system ingests PDFs and images from separate Google Drive folders, uses Gemini
+for structured receipt and take-home-pay extraction, routes uncertain records through
+a human-review workflow, and publishes clean tables to a selectable multi-month Google
+Sheets dashboard. GitHub Actions runs the pipeline every night at 10:00 PM Mountain
+time.
 
 > **Portfolio demo:** [View the sanitized Google Sheets dashboard](https://docs.google.com/spreadsheets/d/1n2MIY6Lcu8Pc98G_gy0XhrARapxfnnzQZvg1Yaf9KF0/edit?usp=sharing)
 >
@@ -34,10 +34,12 @@ It demonstrates:
 
 ```mermaid
 flowchart TD
-    A[Mobile receipt scan] --> B[Google Drive: Inbox]
+    A[Receipt scans] --> B[Receipts: Inbox]
+    P[Direct-deposit screenshots] --> Q[Paystubs: Inbox]
     B --> C[Scheduled GitHub Actions job]
-    C --> D[Discover unprocessed PDF/image files]
-    D --> E[Gemini multimodal extraction]
+    Q --> C
+    C --> D[Discover unprocessed documents]
+    D --> E[Gemini structured multimodal extraction]
     E --> F[Pydantic structured-output validation]
     F --> G{Quality checks}
     G -->|Confidence >= 75% and totals reconcile| H[Processed]
@@ -46,7 +48,9 @@ flowchart TD
     H --> K[Receipts table]
     I --> J
     I --> K
-    J --> L[Google Sheets Dashboard]
+    E --> O[Income table]
+    O --> L[Multi-month budget dashboard]
+    J --> L
     K --> L
     H --> M[Google Drive: Processed]
     I --> N[Google Drive: Review]
@@ -67,8 +71,10 @@ flowchart TD
    receipt subtotal using a two-cent tolerance.
 6. **Human-in-the-loop routing:** Highlight uncertain rows yellow and move their
    source files to `Review`; route validated receipts to `Processed`.
-7. **Analytics publication:** Append transaction-grain and receipt-grain tables while
-   leaving the `Dashboard` tab formula-driven and read-only to the pipeline.
+7. **Income extraction:** Read each payroll deposit's posting date, source, take-home
+   amount, and confidence into an idempotent `Income` table.
+8. **Analytics publication:** Calculate income, spending, current cash surplus,
+   category usage, and remaining budget over an inclusive user-selected month range.
 
 ## Data model
 
@@ -79,7 +85,8 @@ totals and processing metadata across every purchased item.
 |---|---|---|
 | `Transactions` | One row per purchased line item | Date, merchant, normalized item, quantity, unit price, total price, category, subcategory, confidence |
 | `Receipts` | One row per source receipt | Drive file ID, filename, merchant, subtotal, tax, total, processing time, status |
-| `Dashboard` | Aggregated analytical views | Category trends, spending summaries, review indicators |
+| `Income` | One row per direct-deposit screenshot | Deposit date, source, take-home pay, confidence, processing status |
+| `Current Budget` | Selected-period analytical view | Income, spending, current surplus, category budget, amount remaining, percent used |
 
 ### Budget taxonomy
 
@@ -123,10 +130,28 @@ All usable model output is still written to Sheets. Questionable transaction row
 their receipt row are highlighted yellow so a person can correct them without
 blocking the rest of the batch.
 
+Income screenshots follow the same 75% confidence threshold. Only `processed` income
+rows contribute to the dashboard; uncertain deposits remain highlighted for review.
+
+## Dashboard calculations
+
+`Current Budget` provides Start Month and End Month dropdowns. Both endpoints are
+inclusive, so selecting January through March analyzes all three months.
+
+- **Net Income:** Sum of processed take-home deposits in the selected period
+- **Total Spending:** Sum of transaction line totals in the selected period
+- **Current Surplus:** Net Income minus Total Spending
+- **Period Budget:** $1,387 multiplied by the number of selected months
+- **Budget Remaining:** Period Budget minus Total Spending
+- **Category Remaining:** Selected-period category budget minus category spending
+
+Negative surplus and over-budget categories are highlighted red; categories at 80%
+or more of budget are highlighted yellow.
+
 ## Reliability engineering
 
 - **Idempotency:** Google Drive file IDs prevent successfully handled files from
-  producing duplicate transaction data.
+  producing duplicate receipt or income records. Retries update an existing error row.
 - **Failure isolation:** One bad scan does not prevent other receipts in the batch
   from being processed.
 - **Transient-error handling:** Retryable Gemini errors use two delayed retries of
@@ -176,8 +201,9 @@ comparing models, prompts, confidence thresholds, and scan quality.
 | `main.py` | Orchestration, batch isolation, status handling, and Drive routing |
 | `categorize.py` | Prompt, model discovery, structured Gemini call, retries, and fallback |
 | `models.py` | Typed receipt schema and deterministic review rules |
+| `income.py` | Typed take-home-pay extraction, validation, retries, and model fallback |
 | `drive.py` | Drive discovery, download, and folder movement |
-| `sheets.py` | Header-aware writes, idempotency lookup, and review highlighting |
+| `sheets.py` | Writes, category migration, deduplication, and dashboard construction |
 | `config.py` | Environment configuration and validation |
 | `.github/workflows/process-receipts.yml` | Scheduled and manual execution |
 | `tests/test_pipeline.py` | Regression tests for schema, validation, retries, and scheduling |
@@ -201,9 +227,9 @@ python main.py
 ## Deployment configuration
 
 Create a Google Cloud service account, enable the Google Drive and Google Sheets APIs,
-and share the three receipt folders and target spreadsheet with the service-account
-email as an editor. Add the following repository secrets under **Settings → Secrets
-and variables → Actions**:
+and share all receipt/paystub folders plus the target spreadsheet with the
+service-account email as an editor. Add the following repository secrets under
+**Settings → Secrets and variables → Actions**:
 
 | Secret | Purpose |
 |---|---|
@@ -212,11 +238,30 @@ and variables → Actions**:
 | `GOOGLE_DRIVE_INBOX_FOLDER_ID` | Incoming receipt folder |
 | `GOOGLE_DRIVE_PROCESSED_FOLDER_ID` | Validated receipt archive |
 | `GOOGLE_DRIVE_REVIEW_FOLDER_ID` | Human-review queue |
+| `GOOGLE_DRIVE_PAYSTUBS_INBOX_FOLDER_ID` | Incoming direct-deposit screenshots |
+| `GOOGLE_DRIVE_PAYSTUBS_PROCESSED_FOLDER_ID` | Validated income screenshot archive |
+| `GOOGLE_DRIVE_PAYSTUBS_REVIEW_FOLDER_ID` | Income screenshot review queue |
 | `GOOGLE_SHEETS_SPREADSHEET_ID` | Analytics workbook |
 | `GEMINI_MODEL` | Optional explicit model override |
 
-After configuring secrets, use **Actions → Process receipts → Run workflow** for a
-manual test. Scheduled runs execute at 10:00 PM Mountain time.
+### One-time workbook setup
+
+After configuring and pushing the code:
+
+1. Open **Actions → Process budget documents → Run workflow**.
+2. Check **Rebuild Current Budget and safely migrate category labels**.
+3. Run the workflow once.
+
+This setup action preserves all transaction amounts and source data. It changes only
+legacy values in the `Transactions.category` column, removes duplicate receipt error
+rows by Drive file ID, rewrites the two-column `Budget` table, creates `Income`, and
+preserves the original pivot as `Current Budget Backup` before replacing `Current
+Budget` with the selectable dashboard. Re-running setup does not overwrite the backup.
+Do not check the setup option on normal runs unless you intentionally want to reset
+the dashboard's selected months.
+
+Subsequent manual or scheduled runs process both inboxes normally. Scheduled runs
+execute at 10:00 PM Mountain time.
 
 ## Limitations and next steps
 
@@ -225,7 +270,7 @@ manual test. Scheduled runs execute at 10:00 PM Mountain time.
 - Add merchant normalization and reusable item-category memory
 - Track prompt/model versions with every processed receipt
 - Add cost and latency telemetry by model and document type
-- Build automated Dashboard charts from a sanitized demonstration dataset
+- Add automated trend charts to the multi-month dashboard
 
 ## Privacy
 

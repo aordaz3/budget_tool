@@ -21,6 +21,9 @@ class Settings:
     processed_folder_id: str
     review_folder_id: str
     spreadsheet_id: str
+    paystubs_inbox_folder_id: str = ""
+    paystubs_processed_folder_id: str = ""
+    paystubs_review_folder_id: str = ""
     confidence_threshold: float = 0.75
     timezone: str = "America/Denver"
     scheduled_hour: int = 22
@@ -36,6 +39,20 @@ class Settings:
         if missing:
             raise ValueError(
                 "Missing configuration required to process receipts: "
+                + ", ".join(missing)
+            )
+
+    def require_paystub_config(self) -> None:
+        required = {
+            "GEMINI_API_KEY": self.gemini_api_key,
+            "GOOGLE_DRIVE_PAYSTUBS_PROCESSED_FOLDER_ID": self.paystubs_processed_folder_id,
+            "GOOGLE_DRIVE_PAYSTUBS_REVIEW_FOLDER_ID": self.paystubs_review_folder_id,
+            "GOOGLE_SHEETS_SPREADSHEET_ID": self.spreadsheet_id,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ValueError(
+                "Missing configuration required to process pay deposits: "
                 + ", ".join(missing)
             )
 
@@ -65,6 +82,15 @@ class Settings:
             ).strip(),
             spreadsheet_id=os.environ.get(
                 "GOOGLE_SHEETS_SPREADSHEET_ID", ""
+            ).strip(),
+            paystubs_inbox_folder_id=os.environ.get(
+                "GOOGLE_DRIVE_PAYSTUBS_INBOX_FOLDER_ID", ""
+            ).strip(),
+            paystubs_processed_folder_id=os.environ.get(
+                "GOOGLE_DRIVE_PAYSTUBS_PROCESSED_FOLDER_ID", ""
+            ).strip(),
+            paystubs_review_folder_id=os.environ.get(
+                "GOOGLE_DRIVE_PAYSTUBS_REVIEW_FOLDER_ID", ""
             ).strip(),
             confidence_threshold=threshold,
         )

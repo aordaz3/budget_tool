@@ -1,4 +1,4 @@
-name: Process receipts
+name: Process budget documents
 
 on:
   schedule:
@@ -6,6 +6,12 @@ on:
     # guard keeps this at 10 PM America/Denver through daylight-saving changes.
     - cron: "0 4,5 * * *"
   workflow_dispatch:
+    inputs:
+      setup_sheet:
+        description: Rebuild Current Budget and safely migrate category labels
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: process-receipts
@@ -33,7 +39,13 @@ jobs:
           GOOGLE_DRIVE_INBOX_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_INBOX_FOLDER_ID }}
           GOOGLE_DRIVE_PROCESSED_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PROCESSED_FOLDER_ID }}
           GOOGLE_DRIVE_REVIEW_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_REVIEW_FOLDER_ID }}
+          GOOGLE_DRIVE_PAYSTUBS_INBOX_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PAYSTUBS_INBOX_FOLDER_ID }}
+          GOOGLE_DRIVE_PAYSTUBS_PROCESSED_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PAYSTUBS_PROCESSED_FOLDER_ID }}
+          GOOGLE_DRIVE_PAYSTUBS_REVIEW_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_PAYSTUBS_REVIEW_FOLDER_ID }}
           GOOGLE_SHEETS_SPREADSHEET_ID: ${{ secrets.GOOGLE_SHEETS_SPREADSHEET_ID }}
           CONFIDENCE_THRESHOLD: "0.75"
         # Manual dispatches run immediately; cron dispatches use the Mountain-time guard.
-        run: python main.py ${{ github.event_name == 'schedule' && '--scheduled' || '' }}
+        run: >-
+          python main.py
+          ${{ github.event_name == 'schedule' && '--scheduled' || '' }}
+          ${{ inputs.setup_sheet && '--setup-sheet' || '' }}
